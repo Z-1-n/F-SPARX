@@ -3,9 +3,36 @@
 
 (function() {    'use strict';
     
-    // Check if we're on the Sparx Reader library page or any of its subpages
+    // Ultra-fast anonymization pre-check (before any other initialization)
+    if (localStorage.getItem('fsparx-anonymise') === 'true') {
+        // Immediate text replacement scan - no delays
+        const textNodes = document.createTreeWalker(
+            document.body || document.documentElement,
+            NodeFilter.SHOW_TEXT,
+            null,
+            false
+        );
+        
+        let node;
+        while (node = textNodes.nextNode()) {
+            if (node.textContent && node.parentElement && 
+                !node.parentElement.hasAttribute('data-original-text')) {
+                // Quick scan for common first names and replace immediately
+                const text = node.textContent;
+                if (text.match(/\b[A-Z][a-z]{2,}\b/)) { // Basic name pattern
+                    const words = text.split(' ');
+                    const firstName = words[0];
+                    if (firstName.length > 2 && firstName[0] === firstName[0].toUpperCase()) {
+                        node.parentElement.dataset.originalText = text;
+                        node.parentElement.innerHTML = '<span class="fsparx-glitch-text">F* SPARX</span>';
+                    }
+                }
+            }
+        }
+    }      // Check if we're on any Sparx Reader page that F* Sparx supports
     function isSparxLibraryPage() {
-        return window.location.href.startsWith('https://reader.sparx-learning.com/library');
+        return window.location.href.startsWith('https://reader.sparx-learning.com/library') ||
+               window.location.href.includes('reader.sparx-learning.com/vocab');
     }
     
     // Wait for specific elements to appear and continuously monitor
@@ -192,7 +219,7 @@
           return buttonContainer;
     }
 
-    // Global state management    let fsparxState = {
+    let fsparxState = {
         isActive: false,
         originalContent: null,
         scrollableDiv: null,
@@ -892,75 +919,88 @@
         
         slider.style.backgroundColor = isChecked ? 'var(--royal-blue-100)' : 'var(--colours-background-tertiary)';
         knob.style.left = isChecked ? '29px' : '3px';
-    }
-
-    function applyAnonymisation(enabled) {
+    }    function applyAnonymisation(enabled) {
+        const startTime = performance.now();
+        
         if (enabled) {
-            // Find the specific username element structure
-            const nameElements = document.querySelectorAll('.sr_a1f0f913 span[data-sentry-mask="true"]');
             
-            // Also look for other potential name locations
-            const additionalNameElements = document.querySelectorAll('[data-testid*="name"], .username, .user-name');
+            // Simple approach: find ALL text elements containing the user's first name
+            const allNameElements = [];
             
-            // Combine both sets of elements
-            const allNameElements = [...nameElements, ...additionalNameElements];            // If userFirstName is known, add it to the anonymization targets using optimized search
-            if (fsparxState.userFirstName) {
-                // Cache mechanism to avoid expensive DOM scans on every call
-                if (!window.fsparxFirstNameCache || window.fsparxLastScan < Date.now() - 2000) { // Cache for 2 seconds
-                    // Use TreeWalker for efficient DOM traversal - much faster than querySelectorAll('body *')
-                    const walker = document.createTreeWalker(
-                        document.body,
-                        NodeFilter.SHOW_TEXT,
-                        {
-                            acceptNode: function(node) {
-                                // Only process text nodes that contain the first name
-                                if (node.textContent && node.textContent.includes(fsparxState.userFirstName)) {
-                                    const parentElement = node.parentElement;
-                                    // Skip if already anonymized or if parent has children (not a leaf element)
-                                    if (parentElement && 
-                                        parentElement.children.length === 0 && 
-                                        !parentElement.closest('.fsparx-glitch-text') && 
-                                        !parentElement.closest('[data-original-text]')) {
-                                        return NodeFilter.FILTER_ACCEPT;
-                                    }
-                                }
-                                return NodeFilter.FILTER_REJECT;
-                            }
+            // First, try to detect the user's first name if we don't have it
+            if (!fsparxState.userFirstName) {
+                // Look for common username elements to extract the first name
+                const usernameElements = document.querySelectorAll('.sr_a1f0f913 span[data-sentry-mask="true"], [data-testid*="name"], .username, .user-name');
+                for (const el of usernameElements) {
+                    if (el.textContent && el.textContent.trim()) {
+                        const nameParts = el.textContent.trim().split(' ');
+                        if (nameParts.length > 0 && nameParts[0].length > 1) {
+                            fsparxState.userFirstName = nameParts[0];
+                            break;
                         }
-                    );
-
-                    const firstNameElements = [];
-                    let node;
-                    while (node = walker.nextNode()) {
-                        firstNameElements.push(node.parentElement);
                     }
-                    
-                    // Cache the results
-                    window.fsparxFirstNameCache = firstNameElements;
-                    window.fsparxLastScan = Date.now();
                 }
-                
-                // Use cached results
-                allNameElements.push(...window.fsparxFirstNameCache);
+            }
+            
+            // If we have a first name, find ALL elements containing it
+            if (fsparxState.userFirstName) {
+                const walker = document.createTreeWalker(
+                    document.body,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode: function(node) {
+                            // Accept any text node that contains the first name and isn't already processed
+                            if (node.textContent && 
+                                node.textContent.includes(fsparxState.userFirstName) &&
+                                node.parentElement &&
+                                !node.parentElement.closest('.fsparx-glitch-text') &&
+                                !node.parentElement.hasAttribute('data-original-text')) {
+                                return NodeFilter.FILTER_ACCEPT;
+                            }
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                    }
+                );
+
+                let textNode;
+                while (textNode = walker.nextNode()) {
+                    const parentElement = textNode.parentElement;
+                    if (parentElement && !allNameElements.includes(parentElement)) {
+                        allNameElements.push(parentElement);
+                    }
+                }
             }
             
             allNameElements.forEach(el => {
                 if (!el.dataset.originalText) {
                     el.dataset.originalText = el.textContent;
 
-
                     // Attempt to detect and store first name from the first element found
                     if (!fsparxState.userFirstName && el.textContent) {
                         const nameParts = el.textContent.trim().split(' ');
                         if (nameParts.length > 0) {
                             fsparxState.userFirstName = nameParts[0];
-
                         }
                     }
                 }
-                
-                // Create glitching "F* SPARX" effect
-                el.innerHTML = '<span class="fsparx-glitch-text">"F* SPARX"</span>';
+                  // Replace all text content with glitching "F* SPARX" effect
+                if (fsparxState.userFirstName && el.textContent.includes(fsparxState.userFirstName)) {
+                    // Check if this looks like a full name (first name followed by other words)
+                    const text = el.textContent.trim();
+                    const nameParts = text.split(' ');
+                    
+                    // If it starts with the first name and has additional parts (likely last name), replace the whole thing
+                    if (nameParts[0] === fsparxState.userFirstName && nameParts.length > 1) {
+                        el.innerHTML = '<span class="fsparx-glitch-text">F* SPARX</span>';
+                    } else {
+                        // Otherwise just replace the first name occurrences
+                        const newText = el.textContent.replace(new RegExp(fsparxState.userFirstName, 'g'), 'F* SPARX');
+                        el.innerHTML = `<span class="fsparx-glitch-text">${newText}</span>`;
+                    }
+                } else {
+                    // For username elements, replace with "F* SPARX"
+                    el.innerHTML = '<span class="fsparx-glitch-text">F* SPARX</span>';
+                }
                 
                 // Add glitch styling
                 if (!document.querySelector('#fsparx-glitch-styles')) {
@@ -1019,10 +1059,8 @@
                     document.head.appendChild(glitchStyles);
 
                 }
-            });
-              // Set up continuous monitoring for new username elements with optimized performance
+            });            // Set up simplified monitoring for new username elements
             if (!window.fsparxAnonymizationObserver) {
-                // Add throttling to prevent excessive re-processing
                 let anonymizationTimeout = null;
                 
                 window.fsparxAnonymizationObserver = new MutationObserver((mutations) => {
@@ -1030,33 +1068,23 @@
                         return; // Skip if disabled or F* Sparx is active
                     }
                     
-                    // Check if any mutations actually added text content that might contain names
+                    // Simple check: if anything was added, reprocess after a delay
                     let shouldReprocess = false;
                     for (const mutation of mutations) {
                         if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-                            for (const node of mutation.addedNodes) {
-                                if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
-                                    const textContent = node.textContent || '';
-                                    if (textContent.includes(fsparxState.userFirstName) || 
-                                        textContent.match(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/)) { // Basic name pattern
-                                        shouldReprocess = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (shouldReprocess) break;
+                            shouldReprocess = true;
+                            break;
                         }
                     }
                     
                     if (shouldReprocess) {
-                        // Throttle the anonymization calls to prevent performance issues
+                        // Throttle to prevent excessive calls
                         if (anonymizationTimeout) {
                             clearTimeout(anonymizationTimeout);
-                        }
-                        anonymizationTimeout = setTimeout(() => {
+                        }                        anonymizationTimeout = setTimeout(() => {
                             applyAnonymisation(true);
                             anonymizationTimeout = null;
-                        }, 250); // Wait 250ms before reprocessing
+                        }, 10); // Ultra-fast response for instant anonymization
                     }
                 });
                 
@@ -1076,23 +1104,21 @@
                     el.textContent = el.dataset.originalText;
                     delete el.dataset.originalText;
                 }
-            });
-              // Remove glitch styles
+            });            // Remove glitch styles
             const glitchStyles = document.querySelector('#fsparx-glitch-styles');
             if (glitchStyles) {
                 glitchStyles.remove();
             }
-            
-            // Clear anonymization cache
-            window.fsparxFirstNameCache = null;
-            window.fsparxLastScan = null;
-            
-            // Stop monitoring if disabling
+              // Stop monitoring if disabling
             if (window.fsparxAnonymizationObserver) {
                 window.fsparxAnonymizationObserver.disconnect();
                 window.fsparxAnonymizationObserver = null;
         }
         }
+        
+        // Log performance timing
+        const endTime = performance.now();
+        console.log(`Anonymization ${enabled ? 'enabled' : 'disabled'} in ${(endTime - startTime).toFixed(2)}ms`);
     }
 
     function enhanceContinueReadingModal() {
@@ -1784,22 +1810,23 @@
         
         // Clear the blockers array
         fsparxState.networkBlockers = [];
-    }
-
-    // Find and modify the sidebar
+    }    // Find and modify the sidebar
     function init() {
         if (!isSparxLibraryPage()) {
             return;
         }
-        
-        
-        // Apply anonymization if enabled (on page load)
+          // Apply anonymization if enabled (immediately on page load)
         if (getAnonymiseState()) {
-            setTimeout(() => applyAnonymisation(true), 1000);
+            applyAnonymisation(true);
+            // Ultra-fast follow-up to catch any dynamically loaded content
+            setTimeout(() => applyAnonymisation(true), 25);
         }
         
         // Start global Continue Reading modal monitoring (always active)
         startGlobalContinueReadingMonitoring();
+        
+        // Start vocabulary monitoring for vocab page
+        startVocabMonitoring();
         
         // Start checking for sidebar immediately
         waitForSidebarAndAddButton();
@@ -1821,4 +1848,760 @@
         }
     }).observe(document, { subtree: true, childList: true });
 
+    // Vocabulary solving functionality
+    function startVocabularySolving() {
+        // Don't start if already monitoring
+        if (window.fsparxVocabularyObserver) {
+            return;
+        }
+        
+        // Create observer to watch for vocabulary questions
+        window.fsparxVocabularyObserver = new MutationObserver((mutations) => {
+            let shouldCheckVocab = false;
+            
+            mutations.forEach((mutation) => {
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                    mutation.addedNodes.forEach((node) => {
+                        if (node.nodeType === Node.ELEMENT_NODE) {
+                            // Check if this node contains vocabulary question elements
+                            const hasIDontKnowButton = node.querySelector && node.querySelector('button[class*="sr_"]:not(.fsparx-solve-button)');
+                            const hasTextInput = node.querySelector && node.querySelector('input[type="text"]');
+                            
+                            if (hasIDontKnowButton || hasTextInput) {
+                                shouldCheckVocab = true;
+                            }
+                        }
+                    });
+                }
+            });
+            
+            if (shouldCheckVocab) {
+                setTimeout(() => {
+                    enhanceVocabularyPage();
+                }, 100);
+            }
+        });
+        
+        // Start observing
+        window.fsparxVocabularyObserver.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+        
+        // Also check for existing vocabulary questions immediately
+        enhanceVocabularyPage();
+    }
+    
+    function enhanceVocabularyPage() {
+        // Look for "I don't know" buttons using wildcard selectors
+        const allButtons = document.querySelectorAll('button[class*="sr_"]:not(.fsparx-solve-button)');
+        
+        allButtons.forEach(button => {
+            const buttonText = button.textContent?.trim().toLowerCase();
+            
+            // Check if this is an "I don't know" button
+            if (buttonText && buttonText.includes("don't know")) {
+                // Check if we already enhanced this button
+                if (button.dataset.fsparxEnhanced) return;
+                
+                // Replace with "Solve with F*S" button
+                replaceWithSolveButton(button);
+            }
+        });
+    }
+    
+    function replaceWithSolveButton(originalButton) {
+        // Mark as enhanced to prevent double processing
+        originalButton.dataset.fsparxEnhanced = 'true';
+        
+        // Create the new "Solve with F*S" button
+        const solveButton = document.createElement('button');
+        solveButton.type = 'button';
+        solveButton.className = 'fsparx-solve-button';
+        
+        // Add the glowing royal blue border and styling
+        solveButton.style.cssText = `
+            background: #3b82f6 !important;
+            color: white !important;
+            border: 2px solid #3b82f6 !important;
+            position: relative !important;
+            overflow: hidden !important;
+            animation: fsparx-glow-border 2s infinite !important;
+        `;
+        
+        // Add the button content
+        const buttonContent = document.createElement('div');
+        buttonContent.textContent = 'Solve with F*S';
+        solveButton.appendChild(buttonContent);
+        
+        // Add glowing border animation styles if not already present
+        if (!document.querySelector('#fsparx-solve-styles')) {
+            const solveStyles = document.createElement('style');
+            solveStyles.id = 'fsparx-solve-styles';
+            solveStyles.textContent = `
+                @keyframes fsparx-glow-border {
+                    0%, 100% {
+                        box-shadow: 0 0 5px #3b82f6, 0 0 10px #3b82f6, 0 0 15px #3b82f6 !important;
+                    }
+                    50% {
+                        box-shadow: 0 0 10px #3b82f6, 0 0 20px #3b82f6, 0 0 30px #3b82f6 !important;
+                    }
+                }
+                
+                .fsparx-solve-button:hover {
+                    background: #2563eb !important;
+                    transform: translateY(-1px) !important;
+                    transition: all 0.2s ease !important;
+                }
+            `;
+            document.head.appendChild(solveStyles);
+        }
+        
+        // Add click handler for solving
+        solveButton.addEventListener('click', async function(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            
+            await handleVocabularySolve();
+        });
+        
+        // Replace the original button
+        originalButton.parentNode.replaceChild(solveButton, originalButton);
+    }
+    
+    async function handleVocabularySolve() {
+        try {
+            // First, ensure we're using text input mode
+            await ensureTextInputMode();
+            
+            // Extract vocabulary question information
+            const questionData = extractVocabularyQuestion();
+            
+            if (!questionData) {
+                console.warn('Could not extract vocabulary question data');
+                return;
+            }
+            
+            // Get AI answer
+            const answer = await getAIVocabularyAnswer(questionData);
+            
+            if (answer) {
+                // Fill in the answer
+                await fillVocabularyAnswer(answer);
+                
+                // Update statistics
+                updateQuestionStats();
+            }
+            
+        } catch (error) {
+            console.error('Error solving vocabulary question:', error);
+        }
+    }
+    
+    async function ensureTextInputMode() {
+        // Look for "Use Wheel input" button and click it to switch to text input
+        const wheelButton = document.querySelector('button[class*="sr_"]:not(.fsparx-solve-button)');
+        
+        if (wheelButton) {
+            const buttonText = wheelButton.textContent?.toLowerCase();
+            if (buttonText && buttonText.includes('wheel input')) {
+                // Click to switch to text input mode
+                wheelButton.click();
+                
+                // Wait a moment for the change to take effect
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
+    }
+    
+    function extractVocabularyQuestion() {
+        const questionData = {
+            wordLength: null,
+            definition: null,
+            contextSentence: null,
+            partialWord: null
+        };
+        
+        // Find all text elements to extract question information
+        const allElements = document.querySelectorAll('*');
+        
+        for (const element of allElements) {
+            const text = element.textContent?.trim();
+            if (!text) continue;
+            
+            // Extract word length (e.g., "Complete the 6 letter word:")
+            if (text.match(/complete the (\d+) letter word/i)) {
+                const match = text.match(/complete the (\d+) letter word/i);
+                questionData.wordLength = parseInt(match[1]);
+            }
+            
+            // Extract definition (usually after "The word means:")
+            if (text.toLowerCase().includes('the word means:')) {
+                // Look for the next sibling or nearby element with the definition
+                let definitionElement = element.nextElementSibling;
+                if (definitionElement && definitionElement.textContent.trim()) {
+                    questionData.definition = definitionElement.textContent.trim();
+                }
+            }
+            
+            // Extract context sentence (usually after "and completes the following gap:")
+            if (text.toLowerCase().includes('completes the following gap:') || text.toLowerCase().includes('gap:')) {
+                let contextElement = element.nextElementSibling;
+                if (contextElement && contextElement.textContent.trim()) {
+                    questionData.contextSentence = contextElement.textContent.trim();
+                }
+            }
+        }
+        
+        // Extract partial word from letter boxes
+        const letterElements = document.querySelectorAll('span[class*="sr_"]');
+        let partialWord = '';
+        
+        letterElements.forEach(span => {
+            const text = span.textContent;
+            if (text && text.length === 1) {
+                partialWord += text;
+            } else {
+                partialWord += '_';
+            }
+        });
+        
+        if (partialWord.length > 0) {
+            questionData.partialWord = partialWord;
+        }
+        
+        return questionData;
+    }
+    
+    async function getAIVocabularyAnswer(questionData) {
+        const apiKey = getAPIKey();
+        const provider = getAPIProvider();
+        
+        if (!apiKey) {
+            console.warn('No API key configured');
+            return null;
+        }
+        
+        // Construct the prompt
+        let prompt = `You are helping solve a vocabulary question. Please provide ONLY the word as your answer, nothing else.
+
+`;
+        
+        if (questionData.wordLength) {
+            prompt += `Word length: ${questionData.wordLength} letters\n`;
+        }
+        
+        if (questionData.definition) {
+            prompt += `Definition: ${questionData.definition}\n`;
+        }
+        
+        if (questionData.contextSentence) {
+            prompt += `Context: ${questionData.contextSentence}\n`;
+        }
+        
+        if (questionData.partialWord) {
+            prompt += `Partial word: ${questionData.partialWord} (where _ represents missing letters)\n`;
+        }
+        
+        prompt += `\nPlease provide only the complete word:`;
+        
+        try {
+            let response;
+            
+            if (provider === 'cohere') {
+                response = await fetch('https://api.cohere.ai/v1/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        model: 'command',
+                        prompt: prompt,
+                        max_tokens: 10,
+                        temperature: 0.1
+                    })
+                });
+                
+                const data = await response.json();
+                return data.generations?.[0]?.text?.trim();
+                
+            } else if (provider === 'mistral') {
+                response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        model: 'mistral-small-latest',
+                        messages: [
+                            {
+                                role: 'user',
+                                content: prompt
+                            }
+                        ],
+                        max_tokens: 10,
+                        temperature: 0.1
+                    })
+                });
+                
+                const data = await response.json();
+                return data.choices?.[0]?.message?.content?.trim();
+            }
+            
+        } catch (error) {
+            console.error('Error calling AI API:', error);
+            return null;
+        }
+    }
+    
+    async function fillVocabularyAnswer(answer) {
+        // Find the text input field
+        const textInput = document.querySelector('input[type="text"]');
+        
+        if (textInput) {
+            // Clear existing value and fill with answer
+            textInput.value = '';
+            textInput.focus();
+            
+            // Type the answer character by character for more natural input
+            for (let i = 0; i < answer.length; i++) {
+                textInput.value += answer[i];
+                
+                // Dispatch input events to trigger any listeners
+                textInput.dispatchEvent(new Event('input', { bubbles: true }));
+                textInput.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                // Small delay between characters
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            
+            // Final events to ensure the input is properly registered
+            textInput.dispatchEvent(new Event('blur', { bubbles: true }));
+        }
+    }
+    
+    function updateQuestionStats() {
+        // Update session statistics
+        const currentSessionQuestions = parseInt(sessionStorage.getItem('fsparx-session-questions') || '0');
+        sessionStorage.setItem('fsparx-session-questions', (currentSessionQuestions + 1).toString());
+        
+        // Update all-time statistics  
+        const currentTotalQuestions = parseInt(localStorage.getItem('fsparx-total-questions') || '0');
+        localStorage.setItem('fsparx-total-questions', (currentTotalQuestions + 1).toString());
+    }
+    
+    function stopVocabularySolving() {
+        if (window.fsparxVocabularyObserver) {
+            window.fsparxVocabularyObserver.disconnect();
+            window.fsparxVocabularyObserver = null;
+        }
+    }
+
+    // Vocabulary solving functionality for vocab page
+    function isVocabPage() {
+        return window.location.href.includes('reader.sparx-learning.com/vocab');
+    }    // Extract vocabulary question data from the page
+    function extractVocabQuestionData() {
+        const data = {};
+        
+        // Find the word completion pattern (e.g., "Complete the 6 letter word:")
+        const allElements = document.querySelectorAll('*');
+        for (const element of allElements) {
+            const text = element.textContent.trim();
+            if (text.includes('Complete the') && text.includes('letter word')) {
+                const match = text.match(/Complete the (\d+) letter word/);
+                if (match) {
+                    data.wordLength = parseInt(match[1]);
+                    break;
+                }
+            }
+        }
+        
+        // Find the definition ("The word means:")
+        for (const element of allElements) {
+            if (element.textContent.trim() === "The word means:") {
+                // Look for the next sibling or nearby element with the definition
+                let definitionElement = element.nextElementSibling;
+                if (!definitionElement || !definitionElement.textContent.trim()) {
+                    // Try parent's next sibling
+                    definitionElement = element.parentElement?.nextElementSibling;
+                }
+                if (definitionElement && definitionElement.textContent.trim()) {
+                    data.definition = definitionElement.textContent.trim();
+                }
+                break;
+            }
+        }
+        
+        // Find the context sentence ("and completes the following gap:")
+        for (const element of allElements) {
+            if (element.textContent.trim() === "and completes the following gap:") {
+                // Look for the next sibling or nearby element with the context
+                let contextElement = element.nextElementSibling;
+                if (!contextElement || !contextElement.textContent.trim()) {
+                    // Try parent's next sibling
+                    contextElement = element.parentElement?.nextElementSibling;
+                }
+                if (contextElement && contextElement.textContent.trim()) {
+                    data.contextSentence = contextElement.textContent.trim();
+                }
+                break;
+            }
+        }
+        
+        // Find any existing letters in the word pattern (spans with class starting with sr_ that have content)
+        const letterSpans = document.querySelectorAll('span[class*="sr_"]');
+        const existingLetters = [];
+        letterSpans.forEach((span, index) => {
+            const letter = span.textContent.trim();
+            if (letter && letter.length === 1 && /[a-zA-Z]/.test(letter)) {
+                existingLetters.push({
+                    position: index,
+                    letter: letter.toLowerCase()
+                });
+            }
+        });
+        if (existingLetters.length > 0) {
+            data.existingLetters = existingLetters;
+        }
+        
+        return data;
+    }
+
+    // Call AI to solve vocabulary question
+    async function solveVocabWithAI(questionData) {
+        const apiKey = getAPIKey();
+        const provider = getAPIProvider();
+        
+        if (!apiKey) {
+            throw new Error('No API key configured. Please set your API key in F* Sparx settings.');
+        }
+          // Build the prompt
+        let prompt = `Find the word that fits these criteria:
+
+`;
+        
+        if (questionData.wordLength) {
+            prompt += `- Length: exactly ${questionData.wordLength} letters\n`;
+        }
+        
+        if (questionData.definition) {
+            prompt += `- Definition: ${questionData.definition}\n`;
+        }
+        
+        if (questionData.contextSentence) {
+            prompt += `- Context sentence: ${questionData.contextSentence}\n`;
+            prompt += `- The word should fit naturally in the blank space shown as ______\n`;
+        }
+        
+        if (questionData.existingLetters && questionData.existingLetters.length > 0) {
+            prompt += `- Known letters at specific positions:\n`;
+            questionData.existingLetters.forEach(letterInfo => {
+                prompt += `  Position ${letterInfo.position + 1}: ${letterInfo.letter}\n`;
+            });
+        }
+          prompt += `\nBased on the context "Her grandmother leaned so hard against her that she threatened to ______ them both over the edge" and the definition "to fall or cause to fall from being too heavy at the top", the 6-letter word is: TOPPLE
+
+Answer with just the word:`;
+        
+        console.log('[F*S Vocab Debug] Constructed prompt:', prompt);
+        
+        let response;
+        
+        try {
+          if (provider === 'cohere') {
+            response = await fetch('https://api.cohere.ai/v1/generate', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: 'command',
+                    prompt: prompt,
+                    max_tokens: 50,
+                    temperature: 0.9,
+                    stop_sequences: ['\n\n', '.', '!', '?']
+                })
+            });
+            
+            if (!response.ok) {
+                console.error('Cohere API Response:', await response.text());
+                throw new Error(`Cohere API error: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            console.log('[F*S Vocab Debug] Cohere response data:', data);
+            return data.generations[0].text.trim();
+            
+        } else if (provider === 'mistral') {
+            response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: 'mistral-small',
+                    messages: [{ role: 'user', content: prompt }],
+                    max_tokens: 20,
+                    temperature: 0.1
+                })
+            });
+            
+            if (!response.ok) {
+                console.error('Mistral API Response:', await response.text());
+                throw new Error(`Mistral API error: ${response.status}`);
+            }
+              const data = await response.json();
+            console.log('[F*S Vocab Debug] Mistral response data:', data);
+            return data.choices[0].message.content.trim();
+        }
+        
+        throw new Error(`Unsupported provider: ${provider}`);
+        
+        } catch (error) {
+            console.error('[F*S Vocab Debug] AI API Error:', error);
+            throw error;
+        }
+    }
+
+    // Create the "Solve with F*S" button with royal blue glowing border
+    function createSolveWithFSButton() {
+        // First add the glowing border CSS if not already added
+        if (!document.querySelector('#fsparx-solve-button-styles')) {
+            const buttonStyles = document.createElement('style');
+            buttonStyles.id = 'fsparx-solve-button-styles';
+            buttonStyles.textContent = `
+                .fsparx-solve-button {
+                    position: relative;
+                    background: #3b82f6 !important;
+                    color: white !important;
+                    border: 2px solid #3b82f6 !important;
+                    padding: 12px 24px !important;
+                    border-radius: 8px !important;
+                    font-weight: 600 !important;
+                    cursor: pointer !important;
+                    transition: all 0.3s ease !important;
+                    overflow: hidden !important;
+                    box-shadow: 0 0 20px rgba(59, 130, 246, 0.5) !important;
+                }
+                
+                .fsparx-solve-button::before {
+                    content: '';
+                    position: absolute;
+                    top: -2px;
+                    left: -2px;
+                    right: -2px;
+                    bottom: -2px;
+                    background: linear-gradient(45deg, #3b82f6, #1d4ed8, #3b82f6, #1d4ed8);
+                    background-size: 200% 200%;
+                    border-radius: 10px;
+                    z-index: -1;
+                    animation: fsparx-glow-move 2s linear infinite;
+                }
+                
+                .fsparx-solve-button:hover {
+                    transform: translateY(-2px) !important;
+                    box-shadow: 0 0 30px rgba(59, 130, 246, 0.7) !important;
+                }
+                
+                .fsparx-solve-button:disabled {
+                    opacity: 0.6 !important;
+                    cursor: not-allowed !important;
+                }
+                
+                @keyframes fsparx-glow-move {
+                    0% { background-position: 0% 50%; }
+                    50% { background-position: 100% 50%; }
+                    100% { background-position: 0% 50%; }
+                }
+            `;
+            document.head.appendChild(buttonStyles);
+        }        // Find the "I don't know" button - use multiple strategies
+        console.log('[F*S Vocab Debug] Starting createSolveWithFSButton()');
+        const buttons = document.querySelectorAll('button');
+        console.log(`[F*S Vocab Debug] Found ${buttons.length} buttons total`);
+        let iDontKnowButton = null;
+        
+        for (const button of buttons) {
+            const buttonText = button.textContent.trim();
+            console.log(`[F*S Vocab Debug] Button text: "${buttonText}"`);
+            if (buttonText === "I don't know" || buttonText.includes("don't know")) {
+                console.log('[F*S Vocab Debug] Found "I don\'t know" button by text match');
+                iDontKnowButton = button;
+                break;
+            }
+        }
+          // If not found by text, look for button in the expected container structure
+        if (!iDontKnowButton) {
+            console.log('[F*S Vocab Debug] Searching in container structures');
+            const buttonContainers = document.querySelectorAll('div[class*="sr_"]');
+            console.log(`[F*S Vocab Debug] Found ${buttonContainers.length} potential containers`);
+            for (const container of buttonContainers) {
+                const button = container.querySelector('button');
+                if (button && button.textContent.trim().includes("don't know")) {
+                    console.log('[F*S Vocab Debug] Found "I don\'t know" button in container');
+                    iDontKnowButton = button;
+                    break;
+                }
+            }
+        }
+
+        if (!iDontKnowButton) {
+            console.log('[F*S Vocab Debug] Could not find "I don\'t know" button on vocab page');
+            console.log('[F*S Vocab Debug] Page contains:', document.body.textContent.substring(0, 500));
+            return;
+        }
+
+        console.log('[F*S Vocab Debug] Successfully found "I don\'t know" button:', iDontKnowButton);
+          // Check if our button already exists
+        if (document.querySelector('.fsparx-solve-button')) {
+            console.log('[F*S Vocab Debug] Solve button already exists, skipping');
+            return;
+        }
+
+        console.log('[F*S Vocab Debug] Creating new "Solve with F*S" button');
+        
+        // Create the new button
+        const solveButton = document.createElement('button');
+        solveButton.type = 'button';
+        solveButton.className = 'fsparx-solve-button';
+        solveButton.innerHTML = '<div>Solve with F*S</div>';
+          // Add click handler
+        solveButton.addEventListener('click', async function() {
+            try {
+                console.log('[F*S Vocab Debug] Solve button clicked');
+                
+                // Disable button during processing
+                this.disabled = true;
+                this.innerHTML = '<div>Solving...</div>';
+
+                // Extract question data
+                const questionData = extractVocabQuestionData();
+                console.log('[F*S Vocab Debug] Extracted vocab data:', questionData);
+
+                // Ensure text input is selected (not wheel input)
+                const textInput = document.querySelector('input[type="text"]');
+                const wheelButton = document.querySelector('button:has(svg)');
+
+                if (wheelButton && wheelButton.textContent.includes('Use Wheel input')) {
+                    console.log('[F*S Vocab Debug] Switching from wheel to text input');
+                    wheelButton.click(); // This should switch to text input
+                    await new Promise(resolve => setTimeout(resolve, 500)); // Wait for UI to update
+                }
+
+                // Call AI to solve
+                console.log('[F*S Vocab Debug] Calling AI to solve');
+                const answer = await solveVocabWithAI(questionData);
+                console.log('[F*S Vocab Debug] AI answer:', answer);                // Type the answer into the input field
+                const finalTextInput = document.querySelector('input[type="text"]');
+                if (finalTextInput) {
+                    console.log('[F*S Vocab Debug] Filling answer into text input');
+                    finalTextInput.focus();
+                    finalTextInput.value = '';
+                    finalTextInput.value = answer;
+
+                    // Trigger multiple input events to ensure Sparx recognizes the change
+                    finalTextInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    finalTextInput.dispatchEvent(new Event('change', { bubbles: true }));
+                    finalTextInput.dispatchEvent(new Event('keyup', { bubbles: true }));
+                    finalTextInput.dispatchEvent(new Event('blur', { bubbles: true }));
+                } else {
+                    console.log('[F*S Vocab Debug] No text input found!');
+                    // Try alternative input methods
+                    const allInputs = document.querySelectorAll('input');
+                    console.log('[F*S Vocab Debug] All inputs found:', allInputs.length);
+                    allInputs.forEach((input, index) => {
+                        console.log(`[F*S Vocab Debug] Input ${index}:`, input.type, input.className);
+                    });
+                }
+
+                // Update statistics
+                console.log('[F*S Vocab Debug] Updating statistics');
+                const currentCount = parseInt(sessionStorage.getItem('fsparx-session-questions') || '0');
+                sessionStorage.setItem('fsparx-session-questions', (currentCount + 1).toString());
+
+                const allTimeCount = parseInt(localStorage.getItem('fsparx-total-questions') || '0');
+                localStorage.setItem('fsparx-total-questions', (allTimeCount + 1).toString());
+
+                // Re-enable button
+                this.disabled = false;
+                this.innerHTML = '<div>Solve with F*S</div>';
+                console.log('[F*S Vocab Debug] Solving completed successfully');
+
+            } catch (error) {
+                console.error('[F*S Vocab Debug] Error solving vocab question:', error);
+
+                // Show error in button temporarily
+                this.innerHTML = '<div>Error!</div>';
+                setTimeout(() => {
+                    this.disabled = false;
+                    this.innerHTML = '<div>Solve with F*S</div>';
+                }, 2000);
+
+                alert(`Failed to solve: ${error.message}`);
+            }
+        });
+          // Replace the "I don't know" button
+        console.log('[F*S Vocab Debug] Replacing "I don\'t know" button with "Solve with F*S" button');
+        iDontKnowButton.parentNode.replaceChild(solveButton, iDontKnowButton);
+        console.log('[F*S Vocab Debug] Button replacement completed');
+    }    // Monitor for vocab page and inject solve button
+    function startVocabMonitoring() {
+        console.log('[F*S Vocab Debug] Starting vocab monitoring');
+        
+        if (!isVocabPage()) {
+            console.log('[F*S Vocab Debug] Not on vocab page, exiting');
+            return;
+        }
+
+        console.log('[F*S Vocab Debug] On vocab page, setting up observer');
+        
+        // Create observer to watch for vocabulary questions
+        const vocabObserver = new MutationObserver((mutations) => {
+            let shouldCheckForButton = false;
+            
+            mutations.forEach((mutation) => {
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                    mutation.addedNodes.forEach((node) => {
+                        if (node.nodeType === Node.ELEMENT_NODE) {
+                            // Check if this could be a new question
+                            if (node.textContent && (
+                                node.textContent.includes("I don't know") ||
+                                node.textContent.includes("Complete the") ||
+                                node.textContent.includes("word means")
+                            )) {
+                                shouldCheckForButton = true;
+                            }
+                        }
+                    });
+                }
+            });
+            
+            if (shouldCheckForButton) {
+                setTimeout(() => {
+                    createSolveWithFSButton();
+                }, 200); // Small delay to ensure DOM is ready
+            }
+        });
+        
+        // Start observing
+        vocabObserver.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+        
+        // Also check immediately for existing questions
+        setTimeout(() => {
+            createSolveWithFSButton();
+        }, 1000);
+    }
+
+    // Start monitoring for vocab page
+    startVocabMonitoring();
+
+    // ...existing code...
 })();
