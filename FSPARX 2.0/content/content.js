@@ -192,8 +192,7 @@
           return buttonContainer;
     }
 
-    // Global state management
-    let fsparxState = {
+    // Global state management    let fsparxState = {
         isActive: false,
         originalContent: null,
         scrollableDiv: null,
@@ -904,16 +903,45 @@
             const additionalNameElements = document.querySelectorAll('[data-testid*="name"], .username, .user-name');
             
             // Combine both sets of elements
-            const allNameElements = [...nameElements, ...additionalNameElements];
-            
-
-            // If userFirstName is known, add it to the anonymization targets
+            const allNameElements = [...nameElements, ...additionalNameElements];            // If userFirstName is known, add it to the anonymization targets using optimized search
             if (fsparxState.userFirstName) {
-                const firstNameElements = Array.from(document.querySelectorAll('body *')).filter(element => {
-                    return element.children.length === 0 && element.textContent && element.textContent.includes(fsparxState.userFirstName) && !element.closest('.fsparx-glitch-text') && !element.closest('[data-original-text]');
-                });
+                // Cache mechanism to avoid expensive DOM scans on every call
+                if (!window.fsparxFirstNameCache || window.fsparxLastScan < Date.now() - 2000) { // Cache for 2 seconds
+                    // Use TreeWalker for efficient DOM traversal - much faster than querySelectorAll('body *')
+                    const walker = document.createTreeWalker(
+                        document.body,
+                        NodeFilter.SHOW_TEXT,
+                        {
+                            acceptNode: function(node) {
+                                // Only process text nodes that contain the first name
+                                if (node.textContent && node.textContent.includes(fsparxState.userFirstName)) {
+                                    const parentElement = node.parentElement;
+                                    // Skip if already anonymized or if parent has children (not a leaf element)
+                                    if (parentElement && 
+                                        parentElement.children.length === 0 && 
+                                        !parentElement.closest('.fsparx-glitch-text') && 
+                                        !parentElement.closest('[data-original-text]')) {
+                                        return NodeFilter.FILTER_ACCEPT;
+                                    }
+                                }
+                                return NodeFilter.FILTER_REJECT;
+                            }
+                        }
+                    );
 
-                allNameElements.push(...firstNameElements);
+                    const firstNameElements = [];
+                    let node;
+                    while (node = walker.nextNode()) {
+                        firstNameElements.push(node.parentElement);
+                    }
+                    
+                    // Cache the results
+                    window.fsparxFirstNameCache = firstNameElements;
+                    window.fsparxLastScan = Date.now();
+                }
+                
+                // Use cached results
+                allNameElements.push(...window.fsparxFirstNameCache);
             }
             
             allNameElements.forEach(el => {
@@ -992,13 +1020,43 @@
 
                 }
             });
-            
-            // Set up continuous monitoring for new username elements
+              // Set up continuous monitoring for new username elements with optimized performance
             if (!window.fsparxAnonymizationObserver) {
-                window.fsparxAnonymizationObserver = new MutationObserver(() => {
-                    if (getAnonymiseState() && !fsparxState.isActive) {
-                        // Only apply anonymization outside of F* Sparx mode
-                        setTimeout(() => applyAnonymisation(true), 100);
+                // Add throttling to prevent excessive re-processing
+                let anonymizationTimeout = null;
+                
+                window.fsparxAnonymizationObserver = new MutationObserver((mutations) => {
+                    if (!getAnonymiseState() || fsparxState.isActive) {
+                        return; // Skip if disabled or F* Sparx is active
+                    }
+                    
+                    // Check if any mutations actually added text content that might contain names
+                    let shouldReprocess = false;
+                    for (const mutation of mutations) {
+                        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                            for (const node of mutation.addedNodes) {
+                                if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
+                                    const textContent = node.textContent || '';
+                                    if (textContent.includes(fsparxState.userFirstName) || 
+                                        textContent.match(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/)) { // Basic name pattern
+                                        shouldReprocess = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (shouldReprocess) break;
+                        }
+                    }
+                    
+                    if (shouldReprocess) {
+                        // Throttle the anonymization calls to prevent performance issues
+                        if (anonymizationTimeout) {
+                            clearTimeout(anonymizationTimeout);
+                        }
+                        anonymizationTimeout = setTimeout(() => {
+                            applyAnonymisation(true);
+                            anonymizationTimeout = null;
+                        }, 250); // Wait 250ms before reprocessing
                     }
                 });
                 
@@ -1006,7 +1064,6 @@
                     childList: true,
                     subtree: true
                 });
-
             }
             
         } else {
@@ -1020,13 +1077,15 @@
                     delete el.dataset.originalText;
                 }
             });
-            
-            // Remove glitch styles
+              // Remove glitch styles
             const glitchStyles = document.querySelector('#fsparx-glitch-styles');
             if (glitchStyles) {
                 glitchStyles.remove();
-
             }
+            
+            // Clear anonymization cache
+            window.fsparxFirstNameCache = null;
+            window.fsparxLastScan = null;
             
             // Stop monitoring if disabling
             if (window.fsparxAnonymizationObserver) {
